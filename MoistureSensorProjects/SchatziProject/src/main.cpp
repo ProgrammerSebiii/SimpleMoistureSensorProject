@@ -5,8 +5,8 @@
 
 #define MOISTURE_PIN A1
 #define LED_PIN 6
-#define PLUS_BUTTON 3
-#define MINUS_BUTTON 2
+#define PLUS_BUTTON 8
+#define MINUS_BUTTON 3
 #define CALIBRATE_BUTTON 5
 
 #define OLED_RESET 4
@@ -248,11 +248,15 @@ void doCalibrateProcedure()
   for (int i = 0; i < 100; i++)
   {
     sum += get_moisture_value();
+    delay(20);
   }
+
   delay(1000);
   display.clearDisplay();
 
   int tempWaterValue = sum / 100;
+  Serial.print("New water value: ");
+  Serial.println(tempWaterValue);
 
   displayCalib = "Sensor an die Luft";
   displayText(first_line_y, 1, displayCalib);
@@ -269,11 +273,15 @@ void doCalibrateProcedure()
   for (int i = 0; i < 100; i++)
   {
     sum += get_moisture_value();
+    delay(20);
   }
   delay(1000);
   display.clearDisplay();
 
   int tempAirValue = sum / 100;
+
+  Serial.print("New air value: ");
+  Serial.println(tempAirValue);
 
   WaterValue = tempWaterValue;
   AirValue = tempAirValue;
