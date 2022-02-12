@@ -2,7 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <string.h>
-
+#include <EEPROM.h>
 #define MOISTURE_PIN A1
 #define LED_PIN 6
 #define PLUS_BUTTON 8
@@ -14,6 +14,7 @@
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
 int normalTextSize = 2;
 int setTargetTextSize = 3;
 int plusMinusSize = 3;
@@ -28,6 +29,8 @@ int end_second_line_left_x = 128 - 4 * normalTextSize * 6;
 int second_line_y = 18;
 int second_line_small_y = 24;
 
+#define WATER_VALUE_ADDRESS 69
+#define AIR_VALUE_ADDRESS 96
 int AirValue = 456;   // you need to replace this value with analog reading when the sensor is in dry air
 int WaterValue = 145; // you need to replace this value with analog reading when the sensor is in water
 int soilMoistureValue = 0;
@@ -67,6 +70,10 @@ void setup()
     for (;;)
       ; // Don't proceed, loop forever
   }
+
+  WaterValue = EEPROM.read(WATER_VALUE_ADDRESS);
+  AirValue = EEPROM.read(AIR_VALUE_ADDRESS);
+
   // Show initial display buffer contents on the screen --
   // the library initializes this with an Adafruit splash screen.
   display.display();
@@ -379,6 +386,8 @@ void doCalibrateProcedure()
   Serial.print("New air value: ");
   Serial.println(tempAirValue);
 
+  EEPROM.write(WATER_VALUE_ADDRESS, tempWaterValue);
+  EEPROM.write(AIR_VALUE_ADDRESS, tempAirValue);
   WaterValue = tempWaterValue;
   AirValue = tempAirValue;
 }
