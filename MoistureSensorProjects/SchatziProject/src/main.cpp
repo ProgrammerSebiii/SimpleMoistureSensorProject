@@ -21,15 +21,19 @@ int plusMinusSize = 3;
 int begin_first_line_left_x = 10;
 int end_first_line_left_x = 128 - 4 * normalTextSize * 6;
 int first_line_y = 0;
+int first_line_small_y = 5;
 
 int begin_second_line_left_x = 10;
 int end_second_line_left_x = 128 - 4 * normalTextSize * 6;
 int second_line_y = 18;
+int second_line_small_y = 24;
 
 int AirValue = 456;   // you need to replace this value with analog reading when the sensor is in dry air
 int WaterValue = 145; // you need to replace this value with analog reading when the sensor is in water
 int soilMoistureValue = 0;
 int soilmoisturepercent = 0;
+#define CALIBRATION_TIMEOUT 20000L
+#define EASTER_EGG_TIMEOUT 2000
 
 int threshold = 50;
 
@@ -45,6 +49,8 @@ unsigned long displayOnTime;
 bool displayOn = false;
 unsigned long displayTimeout = 5000;
 bool displayOnAgain = false;
+void displayText(int startY, int textSize, String toDisplay);
+
 void setup()
 {
   Serial.begin(115200);
@@ -64,11 +70,17 @@ void setup()
   // Show initial display buffer contents on the screen --
   // the library initializes this with an Adafruit splash screen.
   display.display();
-  display.setTextColor(WHITE);
-  delay(1000); // Pause for 2 seconds
+  delay(1000); // Pause for 1 seconds
   display.clearDisplay();
 
-  display.println("SCHATZ");
+  Serial.println("Displaying intro text");
+  String line1 = "For my precious";
+  String line2 = "Love you";
+  displayText(first_line_small_y, 1, line1);
+  displayText(second_line_small_y, 1, line2);
+  display.display();
+  delay(2000);
+  display.clearDisplay();
 
   displayOnTime = millis();
   displayOn = true;
@@ -76,17 +88,21 @@ void setup()
 
 void loop()
 {
-  Serial.print("Display status: ");
-  Serial.println(displayOn);
+  // Serial.print("Display status: ");
+  // Serial.println(displayOn ? "ON" : "OFF");
 
   if (digitalRead(CALIBRATE_BUTTON) == HIGH)
   {
     Serial.println("Starting calibration");
     doCalibrateProcedure();
+    displayOnTime = millis();
+    displayOn = true;
   }
 
   int moisture = get_moisture_value();
-  Serial.println(moisture);
+  Serial.print("Moisture: ");
+  Serial.print(moisture);
+  Serial.println("%");
   if (moisture < threshold)
   {
     digitalWrite(LED_PIN, HIGH);
@@ -192,21 +208,106 @@ int get_moisture_value()
   return moisture;
 }
 
-bool waitForInput()
+void showEasterEgg(String defaultLine1, String defaultLine2)
 {
-  while (true)
+  display.clearDisplay();
+  String line1_egg = "Fuer Spatz <3";
+  String line2_egg = "Von Hase - I LOVE YOU";
+  displayText(first_line_small_y, 1, line1_egg);
+  displayText(second_line_small_y, 1, line2_egg);
+  display.display();
+  delay(EASTER_EGG_TIMEOUT);
+  display.clearDisplay();
+  displayText(first_line_small_y, 1, defaultLine1);
+  displayText(second_line_small_y, 1, defaultLine2);
+  display.display();
+}
+
+bool checkForEasterEgg(String line1, String line2, bool plus_pressed)
+{
+  int button_high = PLUS_BUTTON;
+  int button_missing = MINUS_BUTTON;
+  if (!plus_pressed)
+  {
+    button_high = MINUS_BUTTON;
+    button_missing = PLUS_BUTTON;
+  }
+
+  delay(100);
+  Serial.print("Button high: ");
+  Serial.print(digitalRead(button_high));
+  Serial.print(" missing button for easter egg: ");
+  Serial.println(button_missing);
+  while (digitalRead(button_high) == HIGH)
+  {
+    if (digitalRead(button_missing) == HIGH)
+    {
+      Serial.println("Easter triggered");
+      showEasterEgg(line1, line2);
+
+      return true;
+      break;
+    }
+  }
+  return false;
+}
+
+bool waitForInput(String line1, String line2)
+{
+  display.clearDisplay();
+  displayText(first_line_small_y, 1, line1);
+  displayText(second_line_small_y, 1, line2);
+  display.display();
+  delay(200);
+
+  unsigned long start = millis();
+  /*
+  Serial.print("Abort?");
+  unsigned long compare = millis() - start;
+  Serial.print(compare);
+  Serial.print("<");
+  Serial.print(20000uL);
+  Serial.print("? ");
+  Serial.println(compare < 20000uL);
+  */
+  while (millis() - start < CALIBRATION_TIMEOUT)
   {
     if (digitalRead(PLUS_BUTTON) == HIGH)
     {
-      display.clearDisplay();
-      return true;
+
+      // Easter egg
+      bool easterEggShown = checkForEasterEgg(line1, line2, true);
+
+      if (easterEggShown)
+      {
+        start = millis();
+      }
+      else
+      {
+        Serial.println("Pressed next (plus button)");
+        display.clearDisplay();
+        return true;
+      }
     }
     else if (digitalRead(MINUS_BUTTON) == HIGH)
     {
-      display.clearDisplay();
-      return false;
+      // Easter egg
+      bool easterEggShown = checkForEasterEgg(line1, line2, false);
+
+      if (easterEggShown)
+      {
+        start = millis();
+      }
+      else
+      {
+        Serial.println("Pressed abort (minus button)");
+        display.clearDisplay();
+        return false;
+      }
     }
   }
+  Serial.println("Calibration timeout reached");
+  return false;
 }
 
 void displayPleaseWait()
@@ -216,6 +317,7 @@ void displayPleaseWait()
   String waitText2 = "warten...";
   displayText(first_line_y, normalTextSize, waitText1);
   displayText(second_line_y, normalTextSize, waitText2);
+  delay(1000);
 }
 
 void doCalibrateProcedure()
@@ -231,13 +333,10 @@ void doCalibrateProcedure()
   delay(1000);
   display.clearDisplay();
 
-  String displayCalib = "Sensor in Wasser";
-  displayText(first_line_y, 1, displayCalib);
-  displayCalib = "L Abbr. | R Weiter";
-  displayText(second_line_y, 1, displayCalib);
-  display.display();
+  String line1 = "Sensor in Wasser";
+  String line2 = "L Abbr. | R Weiter";
 
-  if (!waitForInput())
+  if (!waitForInput(line1, line2))
   {
     return;
   }
@@ -251,22 +350,19 @@ void doCalibrateProcedure()
     delay(20);
   }
 
-  delay(1000);
   display.clearDisplay();
 
   int tempWaterValue = sum / 100;
   Serial.print("New water value: ");
   Serial.println(tempWaterValue);
 
-  displayCalib = "Sensor an die Luft";
-  displayText(first_line_y, 1, displayCalib);
-  displayCalib = "L Abbr. | R Weiter";
-  displayText(second_line_y, 1, displayCalib);
-  display.display();
-  if (!waitForInput())
+  line1 = "Sensor an die Luft";
+  line2 = "L Abbr. | R Weiter";
+  if (!waitForInput(line1, line2))
   {
     return;
   }
+
   displayPleaseWait();
   display.display();
   sum = 0;
@@ -275,7 +371,7 @@ void doCalibrateProcedure()
     sum += get_moisture_value();
     delay(20);
   }
-  delay(1000);
+
   display.clearDisplay();
 
   int tempAirValue = sum / 100;
