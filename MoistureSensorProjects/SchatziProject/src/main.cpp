@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <string.h>
 #include <EEPROM.h>
 #define MOISTURE_PIN A1
 #define LED_PIN 6
@@ -31,10 +30,15 @@ int second_line_small_y = 24;
 
 #define WATER_VALUE_ADDRESS 69
 #define AIR_VALUE_ADDRESS 96
+#define LATER_REMINDER_VALUE_ADDRESS 120
+#define TIME_SINCE_UNDER_THRESHOLD 140
+#define DAYS_THRESHOLD_BEFORE_LIGHT_UP 10
 int AirValue = 456;   // you need to replace this value with analog reading when the sensor is in dry air
 int WaterValue = 145; // you need to replace this value with analog reading when the sensor is in water
 int soilMoistureValue = 0;
 int soilmoisturepercent = 0;
+bool LightUpAfter1Week = false;
+int timeSinceUnderThreshold = 0;
 #define CALIBRATION_TIMEOUT 20000L
 #define EASTER_EGG_TIMEOUT 2000
 
@@ -45,14 +49,28 @@ void displayFirstLine(int moisture);
 void displaySecondLine();
 void doCalibrateProcedure();
 void doNewTargetProcedure();
+void doNewTargetLightUpProcedure();
+
+int freeRam()
+{
+  // https://forum.arduino.cc/index.php?topic=48577.0#:~:text=If%20you're%20arduino%20resets,the%20array%20or%20buffer%20size.
+  extern int __heap_start, *__brkval;
+  int v;
+  return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
+}
+
+// #define hoursBeforeLightUp 168     // 168 = 168 hours = 1 week
+int daysBeforeLightUp = 0;
+
 #define SCREEN_ADDRESS 0x3C
-int get_moisture_value();
+int get_moisture_value(bool asPercent);
 
 unsigned long displayOnTime;
 bool displayOn = false;
 unsigned long displayTimeout = 5000;
 bool displayOnAgain = false;
-void displayText(int startY, int textSize, String toDisplay);
+unsigned long lastTimeUpdateForThresholdCheck = 0;
+void displayText(int startY, int textSize, char *toDisplay);
 
 void setup()
 {
@@ -64,6 +82,8 @@ void setup()
   pinMode(CALIBRATE_BUTTON, INPUT);
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
   {
     Serial.println(F("SSD1306 allocation failed"));
@@ -73,6 +93,13 @@ void setup()
 
   WaterValue = EEPROM.read(WATER_VALUE_ADDRESS);
   AirValue = EEPROM.read(AIR_VALUE_ADDRESS);
+  LightUpAfter1Week = EEPROM.read(LATER_REMINDER_VALUE_ADDRESS);
+  timeSinceUnderThreshold = EEPROM.read(TIME_SINCE_UNDER_THRESHOLD);
+  daysBeforeLightUp = EEPROM.read(DAYS_THRESHOLD_BEFORE_LIGHT_UP);
+  Serial.print("Light up after 1 week: ");
+  Serial.println(LightUpAfter1Week);
+  Serial.print("Time since under threshold: ");
+  Serial.println(timeSinceUnderThreshold);
 
   // Show initial display buffer contents on the screen --
   // the library initializes this with an Adafruit splash screen.
@@ -81,8 +108,8 @@ void setup()
   display.clearDisplay();
 
   Serial.println("Displaying intro text");
-  String line1 = "For my precious";
-  String line2 = "Love you";
+  char *line1 = "For my precious";
+  char *line2 = "Love you";
   displayText(first_line_small_y, 1, line1);
   displayText(second_line_small_y, 1, line2);
   display.display();
@@ -91,12 +118,65 @@ void setup()
 
   displayOnTime = millis();
   displayOn = true;
+  lastTimeUpdateForThresholdCheck = millis();
+
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
 }
+
+#define timeBetweenUpdates 86400000L // 86400000ms = 1 day
 
 void loop()
 {
-  // Serial.print("Display status: ");
-  // Serial.println(displayOn ? "ON" : "OFF");
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
+  unsigned long current = millis();
+  int moisture = get_moisture_value(true);
+
+  if (abs(current - lastTimeUpdateForThresholdCheck) > 100000L)
+  {
+    Serial.println("Time between updates reached");
+    if (LightUpAfter1Week)
+    {
+      // if (moisture < threshold)
+      // {
+      //   timeSinceUnderThreshold += 1;
+      // }
+      // else
+      // {
+      //   timeSinceUnderThreshold = 0;
+      // }
+
+      // Serial.print("Update time since under threshold:");
+      // Serial.println(timeSinceUnderThreshold);
+
+      // lastTimeUpdateForThresholdCheck = millis();
+    }
+    // if (LightUpAfter1Week)
+    // {
+    //   if (moisture < threshold)
+    //   {
+    //     timeSinceUnderThreshold += 1;
+    //   }
+    //   else
+    //   {
+    //     timeSinceUnderThreshold = 0;
+    //   }
+
+    //   Serial.print("Update time since under threshold:");
+    //   Serial.println(timeSinceUnderThreshold);
+
+    //   lastTimeUpdateForThresholdCheck = millis();
+    // }
+    // else
+    // {
+    //   Serial.println("Rest time since under threshold");
+    //   timeSinceUnderThreshold = 0;
+    //   lastTimeUpdateForThresholdCheck = millis();
+    // }
+    // EEPROM.write(TIME_SINCE_UNDER_THRESHOLD, timeSinceUnderThreshold);
+    // delay(1000);
+  }
 
   if (digitalRead(CALIBRATE_BUTTON) == HIGH)
   {
@@ -106,13 +186,17 @@ void loop()
     displayOn = true;
   }
 
-  int moisture = get_moisture_value();
   Serial.print("Moisture: ");
   Serial.print(moisture);
   Serial.println("%");
+
   if (moisture < threshold)
   {
-    digitalWrite(LED_PIN, HIGH);
+    bool lightUpBecauseFlagAndTimeSpan = LightUpAfter1Week && timeSinceUnderThreshold > daysBeforeLightUp;
+    if (lightUpBecauseFlagAndTimeSpan)
+    {
+      digitalWrite(LED_PIN, HIGH);
+    }
   }
   else
   {
@@ -169,35 +253,63 @@ int getStartForString(int length, int textSize)
   return 64 - pixel / 2;
 }
 
-void displayText(int startY, int textSize, String toDisplay)
+void displayText(int startY, int textSize, char *toDisplay)
 {
-  int strLength = toDisplay.length();
+  int strLength = strlen(toDisplay);
   int startX = getStartForString(strLength, textSize);
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
   display.setTextColor(WHITE);
   display.setTextSize(textSize);
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
   display.setCursor(startX, startY);
-  display.print(toDisplay.c_str());
+  Serial.print("To display:");
+  Serial.println(toDisplay);
+  Serial.print("Length: ");
+  Serial.println(strLength);
+  display.print(toDisplay);
 }
 
 void displayFirstLine(int moisture)
 {
-
-  String toDisplay = String(moisture) + String("%");
-  displayText(first_line_y, normalTextSize, toDisplay);
+  //+ String(" ") + String(timeSinceUnderThreshold) + String("/") + String(daysBeforeLightUp)
+  char buffer[30];
+  itoa(moisture, buffer, 10);
+  strcat(buffer, "%");
+  Serial.println(buffer);
+  displayText(first_line_y, normalTextSize, buffer);
 }
 
 void displaySecondLine()
 {
-  String toDisplay = String("-> ") + String(threshold) + String("%");
-  displayText(second_line_y, normalTextSize, toDisplay);
+  char buffer[10];
+  strcpy(buffer, "-> ");
+  char thresholdBuffer[10];
+  itoa(threshold, thresholdBuffer, 10);
+  strcat(buffer, thresholdBuffer);
+  strcat(buffer, "%");
+  displayText(second_line_y, normalTextSize, buffer);
 }
 
-int get_moisture_value()
+int get_moisture_value(bool asPercent)
 {
   soilMoistureValue = analogRead(MOISTURE_PIN); // put Sensor insert into soil
+  Serial.print("Soil value: ");
   Serial.println(soilMoistureValue);
-  soilmoisturepercent = map(soilMoistureValue, AirValue, WaterValue, 0, 100);
 
+  if (!asPercent)
+  {
+    return soilMoistureValue;
+  }
+
+  soilmoisturepercent = map(soilMoistureValue, AirValue, WaterValue, 0, 100);
+  Serial.print("Air value: ");
+  Serial.println(AirValue);
+  Serial.print("Water value: ");
+  Serial.println(WaterValue);
+  Serial.print("Percent value: ");
+  Serial.println(soilmoisturepercent);
   int moisture = 50;
 
   if (soilmoisturepercent >= 100)
@@ -215,11 +327,11 @@ int get_moisture_value()
   return moisture;
 }
 
-void showEasterEgg(String defaultLine1, String defaultLine2)
+void showEasterEgg(char *defaultLine1, char *defaultLine2)
 {
   display.clearDisplay();
-  String line1_egg = "Fuer Spatz <3";
-  String line2_egg = "Von Hase - I LOVE YOU";
+  char *line1_egg = "Fuer Spatz <3";
+  char *line2_egg = "Von Hase - I LOVE YOU";
   displayText(first_line_small_y, 1, line1_egg);
   displayText(second_line_small_y, 1, line2_egg);
   display.display();
@@ -230,7 +342,7 @@ void showEasterEgg(String defaultLine1, String defaultLine2)
   display.display();
 }
 
-bool checkForEasterEgg(String line1, String line2, bool plus_pressed)
+bool checkForEasterEgg(char *line1, char *line2, bool plus_pressed)
 {
   int button_high = PLUS_BUTTON;
   int button_missing = MINUS_BUTTON;
@@ -241,15 +353,15 @@ bool checkForEasterEgg(String line1, String line2, bool plus_pressed)
   }
 
   delay(100);
-  Serial.print("Button high: ");
+  Serial.print(F("Button high: "));
   Serial.print(digitalRead(button_high));
-  Serial.print(" missing button for easter egg: ");
+  Serial.print(F(" missing button for easter egg: "));
   Serial.println(button_missing);
   while (digitalRead(button_high) == HIGH)
   {
     if (digitalRead(button_missing) == HIGH)
     {
-      Serial.println("Easter triggered");
+      Serial.println(F("Easter triggered"));
       showEasterEgg(line1, line2);
 
       return true;
@@ -259,7 +371,7 @@ bool checkForEasterEgg(String line1, String line2, bool plus_pressed)
   return false;
 }
 
-bool waitForInput(String line1, String line2)
+bool waitForInput(char *line1, char *line2)
 {
   display.clearDisplay();
   displayText(first_line_small_y, 1, line1);
@@ -320,8 +432,8 @@ bool waitForInput(String line1, String line2)
 void displayPleaseWait()
 {
   display.clearDisplay();
-  String waitText1 = "Bitte";
-  String waitText2 = "warten...";
+  char *waitText1 = "Bitte";
+  char *waitText2 = "warten...";
   displayText(first_line_y, normalTextSize, waitText1);
   displayText(second_line_y, normalTextSize, waitText2);
   delay(1000);
@@ -332,64 +444,97 @@ void doCalibrateProcedure()
 
   // Show Kalibrierung für eine Zeit lang
   display.clearDisplay();
-  String waitText1 = "Kalibrierung";
-  String waitText2 = "lol";
-  displayText(first_line_y, 1, waitText1);
-  displayText(second_line_y, 2, waitText2);
+  Serial.print("Free ram: ");
+  Serial.println(freeRam());
+  displayText(first_line_y, 1, "Kalibrierung");
+  displayText(second_line_y, 2, "lol");
   display.display();
   delay(1000);
   display.clearDisplay();
-
-  String line1 = "Sensor in Wasser";
-  String line2 = "L Abbr. | R Weiter";
-
-  if (!waitForInput(line1, line2))
-  {
-    return;
-  }
-
-  displayPleaseWait();
   display.display();
-  long sum = 0;
-  for (int i = 0; i < 100; i++)
+  char *line1 = "Skip Kalib?";
+  char *line2 = "L Nein | R Ja";
+  Serial.println("Skip calibration?");
+  bool skip = waitForInput(line1, line2);
+
+  if (!skip)
   {
-    sum += get_moisture_value();
-    delay(20);
+    Serial.println(F("Do not skip calibration"));
+    line1 = "Sensor in Wasser";
+    line2 = "L Abbr. | R Weiter";
+
+    if (!waitForInput(line1, line2))
+    {
+      return;
+    }
+
+    displayPleaseWait();
+    display.display();
+    long sum = 0;
+    for (int i = 0; i < 100; i++)
+    {
+      sum += get_moisture_value(false);
+      delay(20);
+    }
+
+    display.clearDisplay();
+
+    int tempWaterValue = sum / 100;
+    Serial.print(F("New water value: "));
+    Serial.println(tempWaterValue);
+
+    line1 = "Sensor an die Luft";
+    line2 = "L Abbr. | R Weiter";
+    if (!waitForInput(line1, line2))
+    {
+      return;
+    }
+
+    displayPleaseWait();
+    display.display();
+    sum = 0;
+    for (int i = 0; i < 100; i++)
+    {
+      sum += get_moisture_value(false);
+      delay(20);
+    }
+
+    display.clearDisplay();
+
+    int tempAirValue = sum / 100;
+
+    Serial.print(F("New air value: "));
+    Serial.println(tempAirValue);
+
+    EEPROM.write(WATER_VALUE_ADDRESS, tempWaterValue);
+    EEPROM.write(AIR_VALUE_ADDRESS, tempAirValue);
+    WaterValue = tempWaterValue;
+    AirValue = tempAirValue;
+  }
+  else
+  {
+    Serial.println(F("Skip calibration"));
   }
 
-  display.clearDisplay();
+  line1 = "Versp. Leuchten?";
+  line2 = "L Nein. | R Ja";
+  LightUpAfter1Week = waitForInput(line1, line2);
+  EEPROM.write(LATER_REMINDER_VALUE_ADDRESS, LightUpAfter1Week);
+  timeSinceUnderThreshold = 0;
+  EEPROM.write(TIME_SINCE_UNDER_THRESHOLD, timeSinceUnderThreshold);
 
-  int tempWaterValue = sum / 100;
-  Serial.print("New water value: ");
-  Serial.println(tempWaterValue);
-
-  line1 = "Sensor an die Luft";
-  line2 = "L Abbr. | R Weiter";
-  if (!waitForInput(line1, line2))
+  if (LightUpAfter1Week)
   {
-    return;
+    doNewTargetLightUpProcedure();
   }
+}
 
-  displayPleaseWait();
-  display.display();
-  sum = 0;
-  for (int i = 0; i < 100; i++)
-  {
-    sum += get_moisture_value();
-    delay(20);
-  }
-
-  display.clearDisplay();
-
-  int tempAirValue = sum / 100;
-
-  Serial.print("New air value: ");
-  Serial.println(tempAirValue);
-
-  EEPROM.write(WATER_VALUE_ADDRESS, tempWaterValue);
-  EEPROM.write(AIR_VALUE_ADDRESS, tempAirValue);
-  WaterValue = tempWaterValue;
-  AirValue = tempAirValue;
+void displaySecondsLeft(unsigned long start)
+{
+  char secondsBuffer[10];
+  itoa(int((5000 - (millis() - start)) / 1000), secondsBuffer, 10);
+  strcat(secondsBuffer, "s left");
+  displayText(second_line_y, normalTextSize, secondsBuffer);
 }
 
 void doNewTargetProcedure()
@@ -399,15 +544,20 @@ void doNewTargetProcedure()
   while (millis() - start < 5000)
   {
     display.clearDisplay();
-    String newTargetString = String("New:") + String(threshold) + String("% ");
+
+    char buffer[10];
+    strcpy(buffer, "New:");
+    char thresholdBuffer[10];
+    itoa(threshold, thresholdBuffer, 10);
+    strcat(buffer, thresholdBuffer);
+    strcat(buffer, "% ");
 
     if (millis() - timeSinceLastChange > 500)
     {
-      String remainingTimeString = String(int((5000 - (millis() - start)) / 1000)) + String("s left");
-      displayText(second_line_y, normalTextSize, remainingTimeString);
+      displaySecondsLeft(start);
     }
 
-    displayText(first_line_y, normalTextSize, newTargetString.c_str());
+    displayText(first_line_y, normalTextSize, buffer);
 
     display.display();
     delay(50);
@@ -433,6 +583,55 @@ void doNewTargetProcedure()
       start = millis();
     }
   }
+  display.clearDisplay();
+}
+
+void doNewTargetLightUpProcedure()
+{
+  unsigned long timeSinceLastChange = millis();
+  unsigned long start = millis();
+  while (millis() - start < 5000)
+  {
+    display.clearDisplay();
+
+    char buffer[12];
+    strcpy(buffer, "New:");
+    char thresholdBuffer[10];
+    itoa(daysBeforeLightUp, thresholdBuffer, 10);
+    strcat(buffer, thresholdBuffer);
+    strcat(buffer, " days");
+    if (millis() - timeSinceLastChange > 500)
+    {
+      displaySecondsLeft(start);
+    }
+
+    displayText(first_line_y, normalTextSize, buffer);
+
+    display.display();
+    delay(50);
+    if (digitalRead(PLUS_BUTTON) == HIGH)
+    {
+      timeSinceLastChange = millis();
+      daysBeforeLightUp += 1;
+      if (daysBeforeLightUp > 255)
+      {
+        daysBeforeLightUp = 255;
+      }
+
+      start = millis();
+    }
+    else if (digitalRead(MINUS_BUTTON) == HIGH)
+    {
+      timeSinceLastChange = millis();
+      daysBeforeLightUp -= 1;
+      if (daysBeforeLightUp < 0)
+      {
+        daysBeforeLightUp = 0;
+      }
+      start = millis();
+    }
+  }
+  EEPROM.write(DAYS_THRESHOLD_BEFORE_LIGHT_UP, daysBeforeLightUp);
   display.clearDisplay();
 }
 
